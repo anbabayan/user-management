@@ -23,7 +23,7 @@ jobs:
 
       - name: Build Go binary for AWS Lambda
         run: |
-            GOOS=linux GOARCH=arm64 go build -o bootstrap ./handler
+            GOOS=linux GOARCH=arm64 go build -o bootstrap ./handler/main.go
             zip function.zip bootstrap
 
 
