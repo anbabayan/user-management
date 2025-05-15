@@ -28,9 +28,15 @@ func init() {
 		panic(fmt.Sprintf("Failed to connect to DB: %v", err))
 	}
 	userService = &services.UserService{DB: database}
+
+	// Initialize Redis client
+	err = services.InitRedis()
+	if err != nil {
+		panic(fmt.Sprintf("Failed to connect to Redis: %v", err))
+	}
 }
 
-func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func apiGatewayHandler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	switch req.HTTPMethod {
 	case "POST":
 		if req.Path == "/upload" {
@@ -50,6 +56,34 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 		StatusCode: http.StatusNotFound,
 		Body:       "Not Found",
 	}, nil
+}
+
+func eventBridgeHandler(ctx context.Context, event events.CloudWatchEvent) (string, error) {
+	log.Println("EventBridge triggered cache refresh")
+
+	if err := userService.RefreshAllUserCache(); err != nil {
+		log.Printf("Error refreshing cache: %v", err)
+		return "Failed to refresh cache", err
+	}
+
+	return "User cache refresh complete", nil
+}
+
+func handler(ctx context.Context, rawEvent json.RawMessage) (interface{}, error) {
+	// Try to unmarshal as API Gateway event
+	var apiReq events.APIGatewayProxyRequest
+	if err := json.Unmarshal(rawEvent, &apiReq); err == nil && apiReq.HTTPMethod != "" {
+		return apiGatewayHandler(ctx, apiReq)
+	}
+
+	// Try to unmarshal as EventBridge event
+	var ebEvent events.CloudWatchEvent
+	if err := json.Unmarshal(rawEvent, &ebEvent); err == nil && ebEvent.Source != "" {
+		return eventBridgeHandler(ctx, ebEvent)
+	}
+
+	log.Println("Unknown event format")
+	return nil, fmt.Errorf("unsupported event format")
 }
 
 func handleCreateUser(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
