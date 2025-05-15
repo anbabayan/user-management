@@ -1,0 +1,66 @@
+name: Go CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to AWS Lambda
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.21
+
+      - name: Build Go binary for AWS Lambda
+        run: |
+            GOOS=linux GOARCH=arm64 go build -o bootstrap ./handler
+            zip function.zip bootstrap
+
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Save current Lambda version
+        id: get_lambda_version
+        run: |
+          CURRENT_VERSION=$(aws lambda get-function \
+            --function-name ${{ secrets.AWS_LAMBDA_FUNCTION_NAME }} \
+            --query 'Configuration.Version' --output text)
+          echo "Current version is $CURRENT_VERSION"
+          echo "::set-output name=current_version::$CURRENT_VERSION"
+
+      - name: Deploy to AWS Lambda
+        id: deploy
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ secrets.AWS_LAMBDA_FUNCTION_NAME }} \
+            --zip-file fileb://function.zip
+        continue-on-error: true
+
+      - name: Rollback if deployment fails
+        if: failure()
+        run: |
+          echo "Deployment failed. Rolling back to previous version..."
+          aws lambda update-function-code \
+            --function-name ${{ secrets.AWS_LAMBDA_FUNCTION_NAME }} \
+            --version-id ${{ steps.get_lambda_version.outputs.current_version }}
+          echo "Rollback completed to version ${{ steps.get_lambda_version.outputs.current_version }}"
+
+      - name: Verify Deployment
+        if: success()
+        run: |
+          echo "Deployment to Lambda successful!"
