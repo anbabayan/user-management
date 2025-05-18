@@ -2,16 +2,23 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
 	"log"
 	"os"
 	"strings"
+	"time"
 	"user-management/model"
 )
+
+var redisClient *redis.Client
+var ctx = context.TODO()
 
 type UserService struct {
 	DB *gorm.DB
@@ -21,17 +28,69 @@ type S3Client struct {
 	Client *s3.Client
 }
 
+// InitRedis Initialize Redis client to AWS ElastiCache
+func InitRedis() error {
+	redisHost := os.Getenv("REDIS_HOST")
+	if redisHost == "" {
+		return fmt.Errorf("REDIS_HOST environment variable is not set")
+	}
+
+	fmt.Println("Connecting to Redis at:", redisHost)
+
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:      redisHost,
+		Password:  "",  // No password set
+		TLSConfig: nil, // No TLS config if not using TLS
+	})
+
+	_, err := redisClient.Ping(ctx).Result()
+	if err != nil {
+		return fmt.Errorf("failed to connect to Redis: %v", err)
+	}
+
+	fmt.Println("Successfully connected to Redis")
+	return nil
+}
+
 func (s *UserService) CreateUser(user *model.User) error {
-	return s.DB.Create(user).Error
+	return s.DB.Debug().Create(user).Error
 }
 
 func (s *UserService) GetUserByID(id string) (*model.User, error) {
+	// First, check Redis cache for the user data
+	cacheKey := "user:" + id
+	log.Println("Redis Client", redisClient)
+	userJson, err := redisClient.Get(ctx, cacheKey).Result()
+	if err == nil {
+		// User found in Redis cache
+		log.Println("User found in Redis cache")
+		var user model.User
+		err := json.Unmarshal([]byte(userJson), &user)
+		if err != nil {
+			return nil, errors.New("failed to unmarshal user data from cache")
+		}
+		return &user, nil
+	}
+
+	log.Println("User found in DB")
+	// If user not found in Redis, fetch from DB
 	var user model.User
-	// todo change condition
-	//todo check transaction
-	// todo check preload
-	err := s.DB.Preload("Contacts").First(&user, "id = ?", id).Error
-	return &user, err
+	err = s.DB.Debug().Preload("Contacts").First(&user, "id = ?", id).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// Store the fetched user in Redis cache for 30 minutes
+	userData, err := json.Marshal(user)
+	if err != nil {
+		return nil, errors.New("failed to marshal user data to cache")
+	}
+	err = redisClient.Set(ctx, cacheKey, userData, 30*time.Minute).Err() // Cache for 30 minutes
+	if err != nil {
+		log.Printf("Error setting user data to Redis: %v", err)
+	}
+
+	return &user, nil
 }
 
 func (s *UserService) UpdateUser(user *model.User) error {
@@ -65,21 +124,28 @@ func (s *UserService) UpdateUser(user *model.User) error {
 			}
 		}
 
+		// Clear the cached user data in Redis after update
+		cacheKey := "user:" + user.ID
+		err := redisClient.Del(ctx, cacheKey).Err()
+		if err != nil {
+			log.Printf("Error deleting user cache: %v", err)
+		}
+
 		return nil
 	})
 }
 
 func (s *UserService) UpdateUserAvatar(userID string, avatarUrl string) error {
-	return s.DB.Model(&model.User{}).Where("id = ?", userID).Update("avatar", avatarUrl).Error
+	return s.DB.Debug().Model(&model.User{}).Where("id = ?", userID).Update("avatar", avatarUrl).Error
 }
 
 func (s *UserService) DeleteUser(id string) error {
-	return s.DB.Delete(&model.User{}, "id = ?", id).Error
+	return s.DB.Debug().Delete(&model.User{}, "id = ?", id).Error
 }
 
 func (s *UserService) ListUsers(filter map[string]string) ([]model.User, error) {
 	var users []model.User
-	query := s.DB.Preload("Contacts")
+	query := s.DB.Debug().Preload("Contacts")
 	if status, ok := filter["status"]; ok {
 		query = query.Where("status = ?", status)
 	}
@@ -116,5 +182,42 @@ func (s *UserService) PutObject(key, data string) error {
 		log.Printf("failed to put object: %v", err)
 		return errors.New("failed to put object")
 	}
+	return nil
+}
+
+// RefreshAllUserCache fetches all users from the database and updates their cached data in Redis
+func (s *UserService) RefreshAllUserCache() error {
+	log.Println("Starting cache refresh for all users...")
+
+	var users []model.User
+	err := s.DB.Preload("Contacts").Find(&users).Error
+	if err != nil {
+		log.Printf("Error fetching users from DB: %v", err)
+		return fmt.Errorf("failed to fetch users: %w", err)
+	}
+
+	successCount := 0
+	failCount := 0
+
+	for _, user := range users {
+		cacheKey := "user:" + user.ID
+		userJson, err := json.Marshal(user)
+		if err != nil {
+			log.Printf("Failed to marshal user %v: %v", user.ID, err)
+			failCount++
+			continue
+		}
+
+		err = redisClient.Set(ctx, cacheKey, userJson, 30*time.Minute).Err()
+		if err != nil {
+			log.Printf("Failed to cache user %v in Redis: %v", user.ID, err)
+			failCount++
+			continue
+		}
+
+		successCount++
+	}
+
+	log.Printf("Cache refresh complete. Success: %d, Failures: %d", successCount, failCount)
 	return nil
 }
