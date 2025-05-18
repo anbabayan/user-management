@@ -26,6 +26,7 @@ jobs:
             cd handler
             GOOS=linux GOARCH=arm64 go build -o bootstrap main.go
             zip function.zip bootstrap
+            mv function.zip ../
 
 
       - name: Configure AWS Credentials
