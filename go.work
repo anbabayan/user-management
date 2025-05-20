@@ -3,7 +3,7 @@ go 1.24.0
 use (
     ./services
     ./model
-    ./db
+    ./connection
 	./refresh-job/main
 	./handler
 	.

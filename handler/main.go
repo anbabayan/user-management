@@ -9,7 +9,7 @@ import (
 	"log"
 	"net/http"
 	"time"
-	"user-management/db"
+	"user-management/connection"
 	"user-management/model"
 	"user-management/services"
 )
@@ -17,16 +17,17 @@ import (
 var userService *services.UserService
 
 func init() {
-	database, err := db.InitDB()
+	database, err := connection.InitDB()
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to DB: %v", err))
 	}
-	userService = &services.UserService{DB: database}
 
-	err = services.InitRedis()
+	redis, err := connection.InitRedis()
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to Redis: %v", err))
 	}
+	userService = &services.UserService{DB: database,
+		RedisClient: redis}
 }
 
 func apiGatewayHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -166,7 +167,6 @@ func handleUpdateUser(req events.APIGatewayProxyRequest) (events.APIGatewayProxy
 }
 
 func handleUploadAvatar(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// Parse the base64 image data from the request body
 	var requestBody struct {
 		ImageData string `json:"image_data"`
 	}

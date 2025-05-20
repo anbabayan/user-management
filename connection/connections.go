@@ -1,7 +1,9 @@
-package db
+package connection
 
 import (
+	"context"
 	"fmt"
+	"github.com/go-redis/redis/v8"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"log"
@@ -11,8 +13,10 @@ import (
 )
 
 var (
-	DB   *gorm.DB
-	once sync.Once
+	DB          *gorm.DB
+	once        sync.Once
+	redisClient *redis.Client
+	ctx         = context.TODO()
 )
 
 func InitDB() (*gorm.DB, error) {
@@ -40,4 +44,28 @@ func InitDB() (*gorm.DB, error) {
 		log.Println("Migrated")
 	})
 	return DB, err
+}
+
+// InitRedis Initialize Redis client to AWS ElastiCache
+func InitRedis() (*redis.Client, error) {
+	redisHost := os.Getenv("REDIS_HOST")
+	if redisHost == "" {
+		log.Fatalf("REDIS_HOST environment variable is not set")
+	}
+
+	log.Println("Connecting to Redis at:", redisHost)
+
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:      redisHost,
+		Password:  "",
+		TLSConfig: nil,
+	})
+
+	_, err := redisClient.Ping(ctx).Result()
+	if err != nil {
+		log.Fatalf("failed to connect to Redis: %v", err)
+	}
+
+	log.Println("Successfully connected to Redis")
+	return redisClient, err
 }

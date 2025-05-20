@@ -17,39 +17,15 @@ import (
 	"user-management/model"
 )
 
-var redisClient *redis.Client
 var ctx = context.TODO()
 
 type UserService struct {
-	DB *gorm.DB
+	DB          *gorm.DB
+	RedisClient *redis.Client
 }
 
 type S3Client struct {
 	Client *s3.Client
-}
-
-// InitRedis Initialize Redis client to AWS ElastiCache
-func InitRedis() error {
-	redisHost := os.Getenv("REDIS_HOST")
-	if redisHost == "" {
-		return fmt.Errorf("REDIS_HOST environment variable is not set")
-	}
-
-	fmt.Println("Connecting to Redis at:", redisHost)
-
-	redisClient = redis.NewClient(&redis.Options{
-		Addr:      redisHost,
-		Password:  "",
-		TLSConfig: nil,
-	})
-
-	_, err := redisClient.Ping(ctx).Result()
-	if err != nil {
-		return fmt.Errorf("failed to connect to Redis: %v", err)
-	}
-
-	fmt.Println("Successfully connected to Redis")
-	return nil
 }
 
 func (s *UserService) CreateUser(user *model.User) error {
@@ -58,8 +34,8 @@ func (s *UserService) CreateUser(user *model.User) error {
 
 func (s *UserService) GetUserByID(id string) (*model.User, error) {
 	cacheKey := "user:" + id
-	log.Println("Redis Client", redisClient)
-	userJson, err := redisClient.Get(ctx, cacheKey).Result()
+	log.Println("Redis Client", s.RedisClient)
+	userJson, err := s.RedisClient.Get(ctx, cacheKey).Result()
 	if err == nil {
 		log.Println("User found in Redis cache")
 		var user model.User
@@ -82,7 +58,7 @@ func (s *UserService) GetUserByID(id string) (*model.User, error) {
 	if err != nil {
 		return nil, errors.New("failed to marshal user data to cache")
 	}
-	err = redisClient.Set(ctx, cacheKey, userData, 30*time.Minute).Err()
+	err = s.RedisClient.Set(ctx, cacheKey, userData, 30*time.Minute).Err()
 	if err != nil {
 		log.Printf("Error setting user data to Redis: %v", err)
 	}
@@ -118,7 +94,7 @@ func (s *UserService) UpdateUser(user *model.User) error {
 		}
 
 		cacheKey := "user:" + user.ID
-		err := redisClient.Del(ctx, cacheKey).Err()
+		err := s.RedisClient.Del(ctx, cacheKey).Err()
 		if err != nil {
 			log.Printf("Error deleting user cache: %v", err)
 		}
@@ -200,7 +176,7 @@ func (s *UserService) RefreshAllUserCache() error {
 			continue
 		}
 
-		err = redisClient.Set(ctx, cacheKey, userJson, 30*time.Minute).Err()
+		err = s.RedisClient.Set(ctx, cacheKey, userJson, 30*time.Minute).Err()
 		if err != nil {
 			log.Printf("Failed to cache user %v in Redis: %v", user.ID, err)
 			failCount++

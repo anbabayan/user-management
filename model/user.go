@@ -1,6 +1,5 @@
 package model
 
-// todo check data types, indexes on foreign key
 type User struct {
 	ID       string    `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	Avatar   string    `json:"avatar"`
