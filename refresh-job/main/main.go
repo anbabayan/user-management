@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"github.com/aws/aws-lambda-go/lambda"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -9,15 +8,13 @@ import (
 	"user-management/services"
 )
 
-func handler(ctx context.Context) error {
-	// Initialize DB
+func handler() error {
 	dsn := os.Getenv("DB_DSN")
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return err
 	}
 
-	// Initialize Redis
 	if err := services.InitRedis(); err != nil {
 		return err
 	}

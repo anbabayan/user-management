@@ -39,8 +39,8 @@ func InitRedis() error {
 
 	redisClient = redis.NewClient(&redis.Options{
 		Addr:      redisHost,
-		Password:  "",  // No password set
-		TLSConfig: nil, // No TLS config if not using TLS
+		Password:  "",
+		TLSConfig: nil,
 	})
 
 	_, err := redisClient.Ping(ctx).Result()
@@ -57,12 +57,10 @@ func (s *UserService) CreateUser(user *model.User) error {
 }
 
 func (s *UserService) GetUserByID(id string) (*model.User, error) {
-	// First, check Redis cache for the user data
 	cacheKey := "user:" + id
 	log.Println("Redis Client", redisClient)
 	userJson, err := redisClient.Get(ctx, cacheKey).Result()
 	if err == nil {
-		// User found in Redis cache
 		log.Println("User found in Redis cache")
 		var user model.User
 		err := json.Unmarshal([]byte(userJson), &user)
@@ -73,7 +71,6 @@ func (s *UserService) GetUserByID(id string) (*model.User, error) {
 	}
 
 	log.Println("User found in DB")
-	// If user not found in Redis, fetch from DB
 	var user model.User
 	err = s.DB.Debug().Preload("Contacts").First(&user, "id = ?", id).Error
 	if err != nil {
@@ -85,7 +82,7 @@ func (s *UserService) GetUserByID(id string) (*model.User, error) {
 	if err != nil {
 		return nil, errors.New("failed to marshal user data to cache")
 	}
-	err = redisClient.Set(ctx, cacheKey, userData, 30*time.Minute).Err() // Cache for 30 minutes
+	err = redisClient.Set(ctx, cacheKey, userData, 30*time.Minute).Err()
 	if err != nil {
 		log.Printf("Error setting user data to Redis: %v", err)
 	}
@@ -95,8 +92,6 @@ func (s *UserService) GetUserByID(id string) (*model.User, error) {
 
 func (s *UserService) UpdateUser(user *model.User) error {
 	return s.DB.Debug().Transaction(func(tx *gorm.DB) error {
-		// Update user fields
-		// todo check printed queries
 		log.Printf("User update id  %v\n", user.ID)
 		if err := tx.Model(&model.User{}).Where("id = ?", user.ID).
 			Updates(map[string]interface{}{
@@ -109,12 +104,10 @@ func (s *UserService) UpdateUser(user *model.User) error {
 			return err
 		}
 
-		// Delete existing contacts
 		if err := tx.Where("user_id = ?", user.ID).Delete(&model.Contact{}).Error; err != nil {
 			return err
 		}
 
-		// Insert new contacts
 		for i := range user.Contacts {
 			user.Contacts[i].UserID = user.ID
 		}
@@ -124,7 +117,6 @@ func (s *UserService) UpdateUser(user *model.User) error {
 			}
 		}
 
-		// Clear the cached user data in Redis after update
 		cacheKey := "user:" + user.ID
 		err := redisClient.Del(ctx, cacheKey).Err()
 		if err != nil {
@@ -185,7 +177,7 @@ func (s *UserService) PutObject(key, data string) error {
 	return nil
 }
 
-// RefreshAllUserCache fetches all users from the database and updates their cached data in Redis
+// RefreshAllUserCache refreshes the cache for all users
 func (s *UserService) RefreshAllUserCache() error {
 	log.Println("Starting cache refresh for all users...")
 

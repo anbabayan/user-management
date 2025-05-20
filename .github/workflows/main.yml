@@ -23,45 +23,70 @@ jobs:
 
       - name: Build Go binary for AWS Lambda
         run: |
-            cd handler
-            GOOS=linux GOARCH=arm64 go build -o bootstrap main.go
-            zip function.zip bootstrap
-            mv function.zip ../
-
-
+          cd handler
+          rm -f bootstrap function.zip
+          GOOS=linux GOARCH=arm64 go build -o bootstrap main.go
+          zip function.zip bootstrap
+          mv function.zip ../
       - name: Configure AWS Credentials
+        if: always()
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-central-1
 
-      - name: Save current Lambda version
+      - name: Get current Lambda version from alias
         id: get_lambda_version
+        if: always()
         run: |
-          CURRENT_VERSION=$(aws lambda get-function \
+          CURRENT_VERSION=$(aws lambda get-alias \
             --function-name ${{ secrets.AWS_LAMBDA_FUNCTION_NAME }} \
-            --query 'Configuration.Version' --output text)
-          echo "Current version is $CURRENT_VERSION"
-          echo "::set-output name=current_version::$CURRENT_VERSION"
-
-      - name: Deploy to AWS Lambda
+            --name live \
+            --region eu-central-1 \
+            --query 'FunctionVersion' --output text)
+          echo "Current alias version is: $CURRENT_VERSION"
+          if [ -z "$CURRENT_VERSION" ]; then
+            echo "No version returned. Exiting..."
+            exit 1
+          fi
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+      - name: Deploy to AWS Lambda and publish new version
         id: deploy
         run: |
-          aws lambda update-function-code \
+          NEW_VERSION=$(aws lambda update-function-code \
             --function-name ${{ secrets.AWS_LAMBDA_FUNCTION_NAME }} \
-            --zip-file fileb://function.zip
+            --zip-file fileb://function.zip \
+            --publish \
+            --region eu-central-1 \
+            --query 'Version' --output text)
+          echo "New Lambda version: $NEW_VERSION"
+          if [ -z "$NEW_VERSION" ]; then
+            echo "Failed to publish new version."
+            exit 1
+          fi
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
         continue-on-error: true
 
+      - name: Update alias to new version
+        if: success()
+        run: |
+          echo "Updating alias 'live' to version: ${{ steps.deploy.outputs.new_version }}"
+          aws lambda update-alias \
+            --function-name ${{ secrets.AWS_LAMBDA_FUNCTION_NAME }} \
+            --name live \
+            --region eu-central-1 \
+            --function-version ${{ steps.deploy.outputs.new_version }}
       - name: Rollback if deployment fails
         if: failure()
         run: |
-          echo "Deployment failed. Rolling back to previous version..."
-          aws lambda update-function-code \
+          echo "Deployment failed. Rolling back to version: ${{ steps.get_lambda_version.outputs.current_version }}"
+          aws lambda update-alias \
             --function-name ${{ secrets.AWS_LAMBDA_FUNCTION_NAME }} \
-            --version-id ${{ steps.get_lambda_version.outputs.current_version }}
-          echo "Rollback completed to version ${{ steps.get_lambda_version.outputs.current_version }}"
-
+            --name live \
+            --region eu-central-1 \
+            --function-version ${{ steps.get_lambda_version.outputs.current_version }}
+          echo "Rollback complete."
       - name: Verify Deployment
         if: success()
         run: |
