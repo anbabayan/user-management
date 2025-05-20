@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"log"
 	"net/http"
 	"time"
@@ -18,10 +16,6 @@ import (
 
 var userService *services.UserService
 
-type S3Client struct {
-	Client *s3.Client
-}
-
 func init() {
 	database, err := db.InitDB()
 	if err != nil {
@@ -29,14 +23,13 @@ func init() {
 	}
 	userService = &services.UserService{DB: database}
 
-	// Initialize Redis client
 	err = services.InitRedis()
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to Redis: %v", err))
 	}
 }
 
-func apiGatewayHandler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+func apiGatewayHandler(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	switch req.HTTPMethod {
 	case "POST":
 		if req.Path == "/upload" {
@@ -58,7 +51,7 @@ func apiGatewayHandler(ctx context.Context, req events.APIGatewayProxyRequest) (
 	}, nil
 }
 
-func eventBridgeHandler(ctx context.Context, event events.CloudWatchEvent) (string, error) {
+func eventBridgeHandler() (string, error) {
 	log.Println("EventBridge triggered cache refresh")
 
 	if err := userService.RefreshAllUserCache(); err != nil {
@@ -69,17 +62,16 @@ func eventBridgeHandler(ctx context.Context, event events.CloudWatchEvent) (stri
 	return "User cache refresh complete", nil
 }
 
-func handler(ctx context.Context, rawEvent json.RawMessage) (interface{}, error) {
+func handler(rawEvent json.RawMessage) (interface{}, error) {
 	// Try to unmarshal as API Gateway event
 	var apiReq events.APIGatewayProxyRequest
 	if err := json.Unmarshal(rawEvent, &apiReq); err == nil && apiReq.HTTPMethod != "" {
-		return apiGatewayHandler(ctx, apiReq)
+		return apiGatewayHandler(apiReq)
 	}
 
-	// Try to unmarshal as EventBridge event
 	var ebEvent events.CloudWatchEvent
 	if err := json.Unmarshal(rawEvent, &ebEvent); err == nil && ebEvent.Source != "" {
-		return eventBridgeHandler(ctx, ebEvent)
+		return eventBridgeHandler()
 	}
 
 	log.Println("Unknown event format")
@@ -92,7 +84,6 @@ func handleCreateUser(req events.APIGatewayProxyRequest) (events.APIGatewayProxy
 		return errorResponse(http.StatusBadRequest, "Invalid request body")
 	}
 
-	// Validate required fields
 	if user.Username == "" || user.Password == "" || user.Status == "" || len(user.Contacts) == 0 {
 		return errorResponse(http.StatusBadRequest, "Missing required fields")
 	}
@@ -161,7 +152,7 @@ func handleUpdateUser(req events.APIGatewayProxyRequest) (events.APIGatewayProxy
 		return errorResponse(http.StatusBadRequest, "Invalid JSON body")
 	}
 
-	input.ID = userID // Enforce ID from path param
+	input.ID = userID
 
 	if err := userService.UpdateUser(&input); err != nil {
 		log.Printf("Update error: %v", err)
@@ -174,7 +165,6 @@ func handleUpdateUser(req events.APIGatewayProxyRequest) (events.APIGatewayProxy
 	}, nil
 }
 
-// Handle file upload (POST /upload)
 func handleUploadAvatar(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// Parse the base64 image data from the request body
 	var requestBody struct {
@@ -190,40 +180,33 @@ func handleUploadAvatar(req events.APIGatewayProxyRequest) (events.APIGatewayPro
 		return errorResponse(http.StatusBadRequest, "Invalid request body")
 	}
 
-	// Validate image data
 	if requestBody.ImageData == "" {
 		return errorResponse(http.StatusBadRequest, "No image data provided")
 	}
 
-	// Decode the base64 image data
 	decodedData, err := base64.StdEncoding.DecodeString(requestBody.ImageData)
 	if err != nil {
 		return errorResponse(http.StatusInternalServerError, "Failed to decode image data")
 	}
 
-	// Generate a unique file name for the avatar
 	fileName := fmt.Sprintf("avatars/%s.png", generateUUID())
 
-	// Upload the avatar image to S3
 	err = userService.PutObject(fileName, string(decodedData))
 	if err != nil {
 		return errorResponse(http.StatusInternalServerError, "Failed to upload image to S3")
 	}
 
-	// Update user avatar in DB
 	err = userService.UpdateUserAvatar(userID, fileName)
 	if err != nil {
 		return errorResponse(http.StatusInternalServerError, "Failed to update user")
 	}
 
-	// Return the file path (or S3 URL) in the response
 	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
 		Body:       fmt.Sprintf(`{"file_path": "%s"}`, fileName),
 	}, nil
 }
 
-// Helper function to generate a unique UUID (can be replaced with a UUID library)
 func generateUUID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
