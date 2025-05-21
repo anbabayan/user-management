@@ -115,7 +115,7 @@ GitHub Actions pipeline for:
 3. API is accessible via the following endpoint:
 
 ```
-https://w2qz2hpo69.execute-api.eu-central-1.amazonaws.com/test
+https://w2qz2hpo6g.execute-api.eu-central-1.amazonaws.com/test
 ```
 
 ---

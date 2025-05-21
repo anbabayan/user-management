@@ -5,6 +5,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"os"
+	"user-management/connection"
 	"user-management/services"
 )
 
@@ -15,11 +16,13 @@ func handler() error {
 		return err
 	}
 
-	if err := services.InitRedis(); err != nil {
+	redis, err := connection.InitRedis()
+	if err != nil {
 		return err
 	}
 
-	us := services.UserService{DB: db}
+	us := services.UserService{DB: db,
+		RedisClient: redis}
 	return us.RefreshAllUserCache()
 }
 
