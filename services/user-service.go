@@ -113,7 +113,7 @@ func (s *UserService) DeleteUser(id string) error {
 
 func (s *UserService) ListUsers(filter map[string]string) ([]model.User, error) {
 	var users []model.User
-	query := s.DB.Debug().Preload("Contacts")
+	query := s.DB.Debug().Joins("Contacts").Preload("Contacts")
 	if status, ok := filter["status"]; ok {
 		query = query.Where("status = ?", status)
 	}
