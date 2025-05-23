@@ -69,6 +69,8 @@ func (s *UserService) GetUserByID(id string) (*model.User, error) {
 func (s *UserService) UpdateUser(user *model.User) error {
 	return s.DB.Debug().Transaction(func(tx *gorm.DB) error {
 		log.Printf("User update id  %v\n", user.ID)
+
+		// Step 1: Update user basic fields
 		if err := tx.Model(&model.User{}).Where("id = ?", user.ID).
 			Updates(map[string]interface{}{
 				"avatar":   user.Avatar,
@@ -80,6 +82,10 @@ func (s *UserService) UpdateUser(user *model.User) error {
 			return err
 		}
 
+		// 💣 Inject artificial failure to test rollback
+		return errors.New("simulated failure after user update")
+
+		// The rest of this won't be reached if rollback works correctly
 		if err := tx.Where("user_id = ?", user.ID).Delete(&model.Contact{}).Error; err != nil {
 			return err
 		}
@@ -113,7 +119,7 @@ func (s *UserService) DeleteUser(id string) error {
 
 func (s *UserService) ListUsers(filter map[string]string) ([]model.User, error) {
 	var users []model.User
-	query := s.DB.Debug().Joins("Contacts").Preload("Contacts")
+	query := s.DB.Debug().Preload("Contacts")
 	if status, ok := filter["status"]; ok {
 		query = query.Where("status = ?", status)
 	}
